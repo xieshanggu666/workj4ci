@@ -489,3 +489,86 @@ tbody tr:hover { background: rgba(255,255,255,.04); }
 
 /* 雷达图点位 */
 .radar-dot { color: var(--gold); font-size: 12px; }
+/* ================= 赛事保险与事故理赔 ================= */
+.ins-overview {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 18px;
+}
+.io-stat {
+  background: var(--glass); border: 1px solid var(--line); border-radius: 14px;
+  padding: 12px 10px; text-align: center;
+}
+.io-stat b { display: block; font-size: 19px; color: var(--gold); font-weight: 800; }
+.io-stat span { font-size: 11.5px; color: var(--muted); }
+
+/* 保单卡 */
+.policy-card {
+  border-radius: var(--radius); padding: 15px 16px;
+  background: linear-gradient(135deg, rgba(111,231,208,.12), rgba(126,203,255,.08));
+  border: 1px solid rgba(111,231,208,.35);
+}
+.policy-card.claimed { background: rgba(255,215,106,.08); border-color: rgba(255,215,106,.3); }
+.policy-card.expired { opacity: .75; background: var(--glass); border-color: var(--line); }
+.pol-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.pol-top b { font-size: 15px; }
+.pol-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 10px; }
+.pol-grid span {
+  display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--muted);
+  background: rgba(20,22,60,.4); border-radius: 10px; padding: 8px 10px;
+}
+.pol-grid em { font-style: normal; font-size: 14px; font-weight: 800; color: var(--txt); }
+.pol-hint { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+
+/* 投保方案 */
+.plan-list { display: flex; flex-direction: column; gap: 10px; }
+.plan-card {
+  background: var(--glass); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 15px;
+}
+.plan-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.plan-note { font-size: 12px; color: var(--muted); margin-bottom: 10px; line-height: 1.5; }
+.plan-rows { display: flex; flex-direction: column; gap: 5px; margin-bottom: 11px; }
+
+/* 事故理赔单 */
+.claim-list { display: flex; flex-direction: column; gap: 12px; }
+.claim-card {
+  border-radius: var(--radius); padding: 14px 15px; background: var(--glass);
+  border: 1px solid var(--line); border-left: 3px solid var(--rose);
+}
+.cl-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.cl-level { font-weight: 800; font-size: 12.5px; padding: 3px 10px; border-radius: 20px; white-space: nowrap; }
+.cl-level.lv-minor { background: rgba(126,203,255,.18); color: var(--sky); }
+.cl-level.lv-major { background: rgba(255,184,92,.2); color: var(--gold2); }
+.cl-level.lv-crash { background: rgba(255,159,176,.22); color: var(--rose); }
+.cl-place { font-size: 13.5px; }
+.cl-place .cl-rank { font-style: normal; font-size: 11px; color: var(--muted); margin-left: 7px; font-weight: 600; }
+.cl-status { margin-left: auto; font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 20px; }
+.cl-status.st-unfiled { background: rgba(169,179,216,.15); color: var(--muted); }
+.cl-status.st-reported { background: rgba(255,184,92,.18); color: var(--gold2); }
+.cl-status.st-assessed { background: rgba(126,203,255,.18); color: var(--sky); }
+.cl-status.st-paid { background: rgba(111,231,208,.18); color: var(--mint); }
+.cl-status.st-rejected, .cl-status.st-void { background: rgba(169,179,216,.12); color: var(--muted); }
+.cl-cause { font-size: 12.5px; color: var(--muted); margin: 9px 0; line-height: 1.5; }
+.cl-meta { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+.cl-rows { display: flex; flex-direction: column; gap: 5px; margin: 8px 0 4px; padding-top: 8px; border-top: 1px dashed var(--line); }
+.cl-warn { font-size: 11.5px; color: var(--gold2); margin-top: 7px; }
+.cl-actions { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.cl-done { font-size: 12px; color: var(--mint); font-weight: 700; }
+.cl-done.dim { color: var(--muted); }
+
+/* 结算卡内事故行 */
+.s-incident { background: rgba(255,159,176,.1); border-radius: 10px; padding: 8px 10px !important; margin: 2px 0; }
+.s-incident span { font-size: 11.5px; color: var(--rose); line-height: 1.45; }
+.s-incident-sub { padding-left: 10px; }
+.s-claim-btn { margin-top: 6px; }
+
+/* 事故横幅 */
+.race-event.incident {
+  color: var(--rose); border-color: rgba(255,159,176,.7);
+  background: rgba(255,90,110,.16); font-weight: 800;
+}
+
+/* 历届赛季榜事故列 */
+.sb-inc { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.sb-inc.bad { color: var(--rose); }
+
+/* 历史战绩事故标记 */
+.rincident { font-style: normal; font-size: 11px; color: var(--rose); margin-left: 4px; font-weight: 700; }

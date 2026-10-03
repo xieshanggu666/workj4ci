@@ -89,6 +89,32 @@ for (const s of RENTAL_SHIPS) {
   if (!ok) throw new Error('[SKY] 租赁艇型配置非法：' + JSON.stringify(s))
 }
 
+/* ================= 赛事保险：方案目录（服务端唯一事实来源） =================
+ * 每赛季可投保一份（保险费不退、仅当季有效，衔接新赛季自然到期）；一份保单当季只
+ * 理赔一次：报案 → 定损（维修费用口径，全部由服务端核定）→ 赔付（定损额 × 赔付比例，
+ * 以单次上限封顶）。与商店/租约同口径，客户端只能按 id 投保，价格与比例均不可改写。
+ */
+const INSURANCE_PLANS = [
+  { id: 1, name: '云安·基础赛险', premium: 1200, coverage: 0.5, maxPayout: 3000, note: '基础保障，按定损额 50% 赔付，单季一次' },
+  { id: 2, name: '云安·全程护艇险', premium: 2600, coverage: 0.75, maxPayout: 7000, note: '高额护艇，按定损额 75% 赔付，单季一次' },
+  { id: 3, name: '苍穹·旗舰全险', premium: 4800, coverage: 1.0, maxPayout: 15000, note: '全损全赔，按定损额 100% 赔付，单季一次' }
+]
+const INSURANCE_MAP = new Map(INSURANCE_PLANS.map(p => [p.id, p]))
+for (const p of INSURANCE_PLANS) {
+  const ok = typeof p.name === 'string' && p.name.trim() &&
+    Number.isInteger(p.premium) && p.premium > 0 &&
+    typeof p.coverage === 'number' && p.coverage > 0 && p.coverage <= 1 &&
+    Number.isInteger(p.maxPayout) && p.maxPayout > 0
+  if (!ok) throw new Error('[SKY] 保险方案配置非法：' + JSON.stringify(p))
+}
+// 事故等级与情形文案（事故在开赛瞬间按比赛因素确定性生成，文案随记录走）
+const INCIDENT_LEVELS = { minor: { label: '轻微事故', repLoss: 0 }, major: { label: '严重事故', repLoss: 1 }, crash: { label: '坠毁事故', repLoss: 3 } }
+const INCIDENT_CAUSES = {
+  minor: ['云流擦碰，护甲轻度刮损', '侧风偏移蹭上浮岛礁岩，蒙皮小面积损伤', '编队缠斗中擦碰翼尖，局部铆钉松脱'],
+  major: ['乱流中舵面过载变形，转向机构受损', '积雨云结冰打坏翼板，龙骨出现裂纹', '能见度骤降中追尾，护甲大面积凹陷'],
+  crash: ['雷暴直击！艇身结构重创、引擎熄火', '风切变将飞艇抛向礁岩，龙骨断裂迫降云海', '闪电点燃氮气管路，艇体焚毁边缘惊险迫降']
+}
+
 /* ================= 赛季合约：条款配置（服务端唯一事实来源） =================
  * 取代旧版「固定积分达标」赞助：每份合约由若干条款组成，进度按本赛季已结算比赛
  * （天气 / 最终名次 / 开赛时的租赁艇快照）累计，全部条款（或 need 指定条数）达成后，
@@ -337,6 +363,21 @@ function buildRace(c) {
   const wear = 5 + c.diff * 3 + (WEATHER[c.weather] < 0.9 ? 4 : 0)
   const repGain = Math.max(1, 5 - rank + c.diff)
 
+  // 赛事事故（与比赛结果同在开赛瞬间确定，回放/重放永远一致）：事故率随正常磨损、
+  // 赛道难度、恶劣天气上升，机师胆识（grit，与天气抗性同口径）显著化解。
+  // 事故只作用于赛后部件/结构与声望，不改变已经定出的排名；定损与赔付在结算后另走理赔流程。
+  const weatherRisk = { '晴': 0, '风': 0.03, '雨': 0.06, '雾': 0.1, '雷暴': 0.18 }[c.weather] || 0
+  const accChance = clamp(0.06 + wear * 0.006 + c.diff * 0.035 + weatherRisk - (grit - 0.5) * 0.5, 0.03, 0.72)
+  let incident = null
+  if (rng() < accChance) {
+    const sevRoll = rng()
+    const level = sevRoll < 0.62 ? 'minor' : sevRoll < 0.9 ? 'major' : 'crash'
+    const [d0, d1] = { minor: [6, 12], major: [15, 26], crash: [30, 45] }[level]
+    const damage = d0 + Math.floor(rng() * (d1 - d0 + 1))
+    const causes = INCIDENT_CAUSES[level]
+    incident = { level, damage, chance: +accChance.toFixed(2), cause: causes[Math.floor(rng() * causes.length)] }
+  }
+
   // 分段事件：分段节点的名次变化（超车）+ 天气氛围事件，计时锚点取玩家艇自身时间轴
   const events = []
   const flavors = FLAVOR[c.weather] || FLAVOR['晴']
@@ -352,6 +393,10 @@ function buildRace(c) {
     events.push({ t: +(racers[0].entry[si] + racers[0].times[si] * 0.5).toFixed(2), type: 'flavor', text: flavors[Math.floor(rng() * flavors.length)] })
     prevRank = pRank
   })
+  // 事故横幅：在中后段随机时刻弹出，结算卡与理赔单共用同一事故快照
+  if (incident) {
+    events.push({ t: +(racers[0].total * (0.55 + rng() * 0.35)).toFixed(2), type: 'incident', text: `⚠ ${INCIDENT_LEVELS[incident.level].label}！${incident.cause}（艇体损伤 ${incident.damage} 点）` })
+  }
   events.sort((a, b) => a.t - b.t)
 
   racers.forEach(r => { delete r.ai }) // ai 仅引擎内部使用，其字段已展开到记录顶层
@@ -382,6 +427,8 @@ function buildRace(c) {
     racers,
     events,
     result: { rank, pts, money, wear, repGain },
+    // 本场事故快照（null = 平安完赛）：结算时按此施加事故损伤/声望，理赔单以此为定损事实
+    incident,
     duration: +duration.toFixed(2)
   }
 }
@@ -413,23 +460,28 @@ function raceEffect(row, c) {
 function reverseSettledRace(row, c) {
   const g = raceEffect(row, c)
   const rt = raceRental(g.rec)
+  // 事故快照（老记录无此字段 = 平安完赛）与已落物理赔单：回滚口径以快照 + 理赔行为准
+  const inc = g.rec?.incident || null
+  const totalWear = g.wear + (inc?.damage || 0)
+  const incRow = inc ? get('SELECT * FROM incidents WHERE race_id=?', row.id) : null
   let refundAdd = 0
+  let payoutBack = 0
   if (rt && rt.status === 'active') {
-    // 该场为租约艇出赛且租约仍在履行：磨损与已用场次一并回滚到租约（恢复以 100 为上限）
+    // 该场为租约艇出赛且租约仍在履行：磨损（含事故损伤）与已用场次一并回滚到租约（恢复以 100 为上限）
     run('UPDATE rentals SET parts_dur=MIN(100,parts_dur+?), wear_total=MAX(0,wear_total-?), races_used=MAX(0,races_used-1) WHERE id=?',
-      g.wear, g.wear, rt.id)
+      totalWear, totalWear, rt.id)
   } else if (rt && rt.status === 'returned') {
-    // 归还已结算：把本场磨损从「已计费基数」中剔除，按剩余磨损重算边际磨损费与押金退款
-    const wearTotal2 = Math.max(0, (rt.wear_total || 0) - g.wear)
+    // 归还已结算：把本场磨损（含事故损伤）从「已计费基数」中剔除，按剩余磨损重算边际磨损费与押金退款
+    const wearTotal2 = Math.max(0, (rt.wear_total || 0) - totalWear)
     const wearFee2 = wearTotal2 * rt.wear_rate
     const refund2 = Math.max(0, (rt.deposit || 0) - wearFee2)
     refundAdd = Math.max(0, refund2 - (rt.refund || 0))
     run('UPDATE rentals SET parts_dur=MIN(100,parts_dur+?), wear_total=?, races_used=MAX(0,races_used-1), wear_fee=?, refund=? WHERE id=?',
-      g.wear, wearTotal2, wearFee2, refund2, rt.id)
+      totalWear, wearTotal2, wearFee2, refund2, rt.id)
   } else if (!rt) {
-    // 自有艇出赛：恢复自有艇磨损
+    // 自有艇出赛：恢复自有艇磨损（含事故损伤）
     const a = airship()
-    run('UPDATE airships SET parts_dur=MIN(100,parts_dur+?), hp=MIN(100,hp+?) WHERE id=?', g.wear, g.wear, a.id)
+    run('UPDATE airships SET parts_dur=MIN(100,parts_dur+?), hp=MIN(100,hp+?) WHERE id=?', totalWear, totalWear, a.id)
   }
   // 租约记录缺失：无归属可回（数据已不在），保持与正向口径一致，不动任何部件与资金
   const pilotId = g.rec?.factors?.pilot?.id
@@ -439,14 +491,27 @@ function reverseSettledRace(row, c) {
     run('UPDATE pilots SET exp=MAX(0,exp-?), mood=MIN(100,MAX(0,mood+?)) WHERE id=?',
       expGain, moodLoss, pilotId)
   }
-  return { ...g, refundAdd }
+  // 事故理赔单回滚：已赔付的冲回赔款、恢复保单（claimed→active）；未赔付的报案/定损单只作废；
+  // 坠毁/严重事故的声望扣减同步恢复。资金冲回交由调用方在单一边界统一入账
+  let repIncidentBack = 0
+  if (inc && incRow) {
+    if (incRow.status === 'paid') {
+      payoutBack = incRow.payout || 0
+      if (incRow.claim_id) {
+        run("UPDATE insurance SET status='active', claimed_incident_id=NULL, claimed_at=NULL WHERE id=?", incRow.claim_id)
+      }
+    }
+    repIncidentBack = INCIDENT_LEVELS[inc.level]?.repLoss || 0
+    run("UPDATE incidents SET status='void' WHERE id=?", incRow.id)
+  }
+  return { ...g, refundAdd, payoutBack, repIncidentBack }
 }
 function settleRace(id) {
   const row = getRaceRow(id)
   if (!row) return { ok: false, status: 404, msg: '比赛记录不存在' }
   if (row.status === 'void') return { ok: false, status: 409, msg: '该比赛已在历史修复中作废，不能再次结算' }
   // 幂等重放同样要告知前端「本季是否已 6 站完赛」（决定结算卡是否展示进入新赛季）
-  if (row.settled) return { ok: true, already: true, race: parseRace(row), contractsPaid: [], contractsRevoked: [], seasonComplete: isSeasonComplete(row.season) }
+  if (row.settled) return { ok: true, already: true, race: parseRace(row), contractsPaid: [], contractsRevoked: [], incident: incidentBrief(row.season, row.id), seasonComplete: isSeasonComplete(row.season) }
 
   const rec = JSON.parse(row.record)
   const c = get('SELECT * FROM circuits WHERE id=?', row.circuit_id)
@@ -458,7 +523,7 @@ function settleRace(id) {
     if (again.status === 'void') {
       result = { ok: false, status: 409, msg: '该比赛已在历史修复中作废，不能再次结算' }
     } else if (again.settled) {
-      result = { ok: true, already: true, race: parseRace(again), contractsPaid: [], contractsRevoked: [], seasonComplete: isSeasonComplete(again.season) }
+      result = { ok: true, already: true, race: parseRace(again), contractsPaid: [], contractsRevoked: [], incident: incidentBrief(again.season, again.id), seasonComplete: isSeasonComplete(again.season) }
     } else if (c?.finished) {
       // 极端兜底：赛站已被另一场比赛结算 → 本条记录作废，绝不重复发奖，也不混入历史战绩
       run("UPDATE races SET status='void', settled=0, voided_at=? WHERE id=?", now(), row.id)
@@ -470,24 +535,29 @@ function settleRace(id) {
         result = { ok: false, status: 409, msg: '前置赛站尚未完赛，该比赛暂不能结算' }
       } else {
         const { rank, pts, money, wear, repGain } = rec.result
+        const incidentSnap = rec.incident || null  // 事故快照：null = 平安完赛
         // 磨损归属以开赛快照为唯一依据（与 reverseSettledRace 对称）：
-        //  - 租约仍 active：磨损记入租约（归还时按 wear_total 计费）并计一场次，自有艇不磨损；
+        //  - 租约仍 active：正常磨损 + 事故损伤一并记入租约（归还时按 wear_total 计费）并计一场次，
+        //    保险赔付的是「租方本要承担的磨损费」，自有艇不磨损；
         //  - 租约已 returned：归还时磨损已钱货两讫，本场不再重复计费，更不得回扣封存的自有艇；
-        //  - 无租约：自有艇出赛，正常磨损。
+        //  - 无租约：自有艇出赛，正常磨损 + 事故损伤由本队承担（事后可维护/理赔）。
         const rt = raceRental(rec)
+        const dmg = incidentSnap?.damage || 0
         if (rt && rt.status === 'active') {
-          run('UPDATE rentals SET parts_dur=MAX(10,parts_dur-?), wear_total=wear_total+?, races_used=races_used+1 WHERE id=?',
-            wear, wear, rt.id)
+          run('UPDATE rentals SET parts_dur=MAX(5,parts_dur-?), wear_total=wear_total+?, races_used=races_used+1 WHERE id=?',
+            wear + dmg, wear + dmg, rt.id)
         } else if (!rt) {
           const a = airship()
-          const newPd = Math.max(10, a.parts_dur - wear)
-          run('UPDATE airships SET parts_dur=?, hp=? WHERE id=?', newPd, Math.max(20, a.hp - wear), a.id)
+          const newPd = Math.max(5, a.parts_dur - wear - dmg)
+          run('UPDATE airships SET parts_dur=?, hp=? WHERE id=?', newPd, Math.max(10, a.hp - wear - dmg), a.id)
         }
         if (rec.factors.pilot) {
           run('UPDATE pilots SET exp=exp+?, mood=MIN(100,MAX(0,mood-?)) WHERE id=?',
             rank <= 4 ? 3 : 1, rank > 8 ? 6 : 2, rec.factors.pilot.id)
         }
-        run('UPDATE team SET money=money+?, rep=rep+?, season_pts=season_pts+? WHERE id=1', money, repGain, pts)
+        // 事故声望扣减：严重 -1、坠毁 -3（轻微事故不扣声望），与名次声望分开入账
+        const repLoss = incidentSnap ? (INCIDENT_LEVELS[incidentSnap.level]?.repLoss || 0) : 0
+        run('UPDATE team SET money=money+?, rep=MAX(0,rep+?), season_pts=season_pts+? WHERE id=1', money, repGain - repLoss, pts)
         const ranksDone = all('SELECT rank FROM circuits WHERE finished=1')
         const best = Math.min(rank, ...ranksDone.map(r => r.rank))
         run('UPDATE team SET season_pos=? WHERE id=1', Math.max(1, best))
@@ -497,11 +567,20 @@ function settleRace(id) {
           row.circuit_id, row.id, rec.season, rank, pts, money, note, now())
         run("UPDATE races SET status='settled', settled=1, rank=?, pts=?, money=?, wear=?, rep_gain=?, settled_at=? WHERE id=?",
           rank, pts, money, wear, repGain, now(), row.id)
+        // 事故理赔单（status=reported）随结算一并落库：定损/赔付只能在这条行上推进，
+        // 一场比赛至多一起（race_id 唯一）；平安完赛不落行，事后报案无据（接口 404）
+        let incBrief = null
+        if (incidentSnap) {
+          run(`INSERT INTO incidents (race_id,season,circuit_id,level,cause,damage,status,created_at,reported_at)
+            VALUES (?,?,?,?,?,?, 'reported', ?, ?)`,
+            row.id, rec.season, row.circuit_id, incidentSnap.level, incidentSnap.cause, dmg, row.created_at || now(), now())
+          incBrief = incidentBrief(rec.season, row.id)
+        }
         const contractSettle = reconcileContracts(rec.season) // 同一事务内对账赛季合约（累计进度→一次性兑现）
         const settledRow = parseRace(getRaceRow(id))
         // 全部 6 站已结算（且尚未衔接新赛季）→ 结算卡展示赛季总结与「进入新赛季」
         const complete = orderedCircuits().every(x => x.finished)
-        result = { ok: true, already: false, race: settledRow, contractsPaid: contractSettle.paid, contractsRevoked: contractSettle.revoked, seasonComplete: complete }
+        result = { ok: true, already: false, race: settledRow, contractsPaid: contractSettle.paid, contractsRevoked: contractSettle.revoked, incident: incBrief, seasonComplete: complete }
       }
     }
     db.exec('COMMIT')
@@ -650,6 +729,13 @@ function seasonLiveStats(season) {
   const rows = all(
     "SELECT rank,pts,money,rep_gain FROM races WHERE status='settled' AND settled=1 AND season=?", season)
   const ranks = rows.map(r => r.rank).filter(r => r != null)
+  // 事故与理赔统计按物理理赔单口径（作废单不计；事故数按比赛记录中的事故快照统计）
+  const incRows = all("SELECT status,payout FROM incidents WHERE season=? AND status!='void'", season)
+  const settledRows = all(
+    "SELECT record FROM races WHERE status='settled' AND settled=1 AND season=?", season)
+  const accidentN = settledRows.reduce((n, r) => {
+    try { return n + (JSON.parse(r.record)?.incident ? 1 : 0) } catch (e) { return n }
+  }, 0)
   return {
     season,
     pts: rows.reduce((a, r) => a + (r.pts || 0), 0),
@@ -658,7 +744,9 @@ function seasonLiveStats(season) {
     wins: ranks.filter(r => r === 1).length,
     podiums: ranks.filter(r => r <= 3).length,
     bestRank: ranks.length ? Math.min(...ranks) : null,
-    racesN: rows.length
+    racesN: rows.length,
+    incidents: accidentN,
+    payouts: incRows.filter(i => i.status === 'paid').reduce((a, i) => a + (i.payout || 0), 0)
   }
 }
 // 历届赛季榜：seasons 归档行 + 当前赛季滚动行（未归档，标记 current），新季在前
@@ -667,14 +755,17 @@ function seasonsPayload() {
   const list = all('SELECT * FROM seasons ORDER BY season DESC').map(s => ({
     season: s.season, pts: s.pts, money: s.money, rep: s.rep, wins: s.wins,
     podiums: s.podiums, bestRank: s.best_rank, bestPos: s.best_pos,
-    racesN: s.races_n, finishedAt: s.finished_at, current: false
+    racesN: s.races_n, incidents: s.incidents || 0, payouts: s.payouts || 0,
+    finishedAt: s.finished_at, current: false
   }))
   if (!list.some(s => s.season === t.season)) {
     const live = seasonLiveStats(t.season)
     list.unshift({
       season: t.season, pts: Number(t.season_pts) || 0, money: live.money, rep: live.rep,
       wins: live.wins, podiums: live.podiums, bestRank: live.bestRank,
-      bestPos: Number(t.season_pos) || 1, racesN: live.racesN, finishedAt: null, current: true
+      bestPos: Number(t.season_pos) || 1, racesN: live.racesN,
+      incidents: live.incidents, payouts: live.payouts,
+      finishedAt: null, current: true
     })
   }
   return list
@@ -713,10 +804,10 @@ function advanceSeason() {
       // 1) 归档老赛季最终战绩到排行榜（races/race_log/contracts 原样保留，回放不受影响）
       const live = seasonLiveStats(season)
       const bestPos = Math.max(1, Number(t.season_pos) || 1)
-      run(`INSERT INTO seasons (season,pts,money,rep,wins,podiums,best_rank,best_pos,races_n,finished_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      run(`INSERT INTO seasons (season,pts,money,rep,wins,podiums,best_rank,best_pos,races_n,incidents,payouts,finished_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
         season, Number(t.season_pts) || 0, live.money, live.rep, live.wins, live.podiums,
-        live.bestRank, bestPos, finishedCount, now())
+        live.bestRank, bestPos, finishedCount, live.incidents, live.payouts, now())
       // 2) 滚动数据分层重置：积分/车队名次归零（money、rep 为跨赛季资产，保留）
       const nextSeason = season + 1
       run('UPDATE team SET season=?, season_pts=0, season_pos=1 WHERE id=1', nextSeason)
@@ -724,11 +815,17 @@ function advanceSeason() {
       run('UPDATE circuits SET finished=0, rank=NULL')
       // 4) 新赛季合约按当前配置重签（老合约行保留，进度按各自赛季的比赛记录现算，互不串账）
       ensureContracts(nextSeason)
+      // 5) 保险按赛季分层：老赛季有效保单自然到期（不退保险费）；当季已报案/定损但未赔付的
+      //    理赔单一律拒付结案（赛季结束是保险责任的终点），已赔付的不受影响、原样归档可查
+      run("UPDATE insurance SET status='expired', expired_at=? WHERE season=? AND status='active'", now(), season)
+      run("UPDATE incidents SET status='rejected', rejected_at=? WHERE season=? AND status IN ('reported','assessed')",
+        now(), season)
       body = {
         ok: true, already: false, season: nextSeason,
         summary: {
           season, pts: Number(t.season_pts) || 0, money: live.money, rep: live.rep,
-          wins: live.wins, podiums: live.podiums, bestRank: live.bestRank, bestPos
+          wins: live.wins, podiums: live.podiums, bestRank: live.bestRank, bestPos,
+          incidents: live.incidents, payouts: live.payouts
         }
       }
     }
@@ -739,6 +836,292 @@ function advanceSeason() {
     return { status: 500, body: { ok: false, msg: '新赛季开启失败，请重试' } }
   }
   return { status: 200, body }
+}
+
+/* ================= 赛事事故与保险理赔 =================
+ * 事故在开赛瞬间随比赛记录确定性生成（record.incident），结算时事故损伤施加给出赛艇
+ * （自有艇 → parts_dur/hp，租约艇 → wear_total，与正常磨损同口径），并生成物理理赔单
+ * （reported）。车队随后可：定损（服务端按出赛艇归属核定维修费用）→ 赔付（当季有效保单、
+ * 且保单先于开赛存在，按 coverage 与上限赔付，一案一季，付款幂等）。
+ * 保单按赛季分层：衔接新赛季时有效保单到期、未决理赔单拒付；越站作废按结算口径对称冲回
+ * （已赔付的赔款冲回、保单恢复有效）。所有资金/声望改动都在调用方事务边界一次完成。
+ */
+const OWN_REPAIR_RATE = 25  // 自有艇事故损伤的单位维修费用（与 /api/maintain 的 25/点同价）
+function currentPolicy(season = teamCore().season) {
+  return get('SELECT * FROM insurance WHERE season=? ORDER BY id DESC LIMIT 1', season) || null
+}
+// 行时间 → epoch ms：新表 created_at 为数字串；老库/中文时间串兜底回退 0（按「不早于」失败处理）
+function tsMs(v) { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : (Date.parse(v) || 0) }
+// 理赔单对外视图：附带比赛/赛道信息、出赛艇归属与当前可执行动作（服务端判定，前端只渲染）
+function incidentBrief(season, raceId) {
+  const row = get('SELECT * FROM incidents WHERE race_id=? AND season=?', raceId, season)
+  if (!row) return null
+  const race = get('SELECT * FROM races WHERE id=?', row.race_id)
+  let rec = null
+  try { rec = race ? JSON.parse(race.record) : null } catch (e) { rec = null }
+  const cir = get('SELECT name,weather,diff FROM circuits WHERE id=?', row.circuit_id)
+  const rentalSnap = rec?.factors?.rental || null
+  const policy = row.claim_id ? get('SELECT * FROM insurance WHERE id=?', row.claim_id) : null
+  const lv = INCIDENT_LEVELS[row.level]
+  return {
+    id: row.id, raceId: row.raceId || row.race_id, season: row.season,
+    circuit: { id: row.circuit_id, name: cir?.name || '', weather: cir?.weather || rec?.circuit?.weather || '', diff: cir?.diff ?? rec?.circuit?.diff ?? 0 },
+    rank: race?.rank ?? rec?.result?.rank ?? null,
+    level: row.level, levelLabel: lv?.label || row.level, repLoss: lv?.repLoss || 0,
+    cause: row.cause, damage: row.damage,
+    ship: rentalSnap ? { kind: 'rental', name: rentalSnap.name } : { kind: 'own', name: airship().name },
+    repairCost: row.repair_cost || 0, assessed: row.assessed || 0, payout: row.payout || 0,
+    status: row.status, claimId: row.claim_id || null,
+    policyName: policy?.name || null,
+    reportedAt: row.reported_at, assessedAt: row.assessed_at, paidAt: row.paid_at, rejectedAt: row.rejected_at
+  }
+}
+// 报案 → 定损 → 赔付 各阶段的可行性（服务端单一口径，按钮与接口共用）。
+// filed=false 时用于「未报案事故」的入口判定（只关心保单是否有效、是否先于开赛）。
+function claimEligibility(inc, season = teamCore().season, filed = true) {
+  const res = { canReport: false, canAssess: false, canPayout: false, reason: '' }
+  const race = inc.race_id != null ? getRaceRow(inc.race_id) : null
+  if (!race || race.status !== 'settled' || !race.settled) {
+    res.reason = '只有已结算的比赛才能报案理赔'
+    return res
+  }
+  if (race.season !== season) { res.reason = '该事故属于往季赛事，保险责任已终止'; return res }
+  if (filed && inc.status === 'void') { res.reason = '该事故记录已随比赛作废'; return res }
+  const policy = currentPolicy(season)
+  if (!policy || policy.status !== 'active') { res.reason = '当前赛季没有有效保单，请先投保'; return res }
+  if (policy.claimed_incident_id) { res.reason = '本季保单的一次理赔机会已使用'; return res }
+  // 事后投保不予理赔：保单必须在该场开赛之前生效（1s 时钟余量：开赛仅早于保单 1s 内仍视为在先）；
+  // created_ts 为 epoch 列，老库缺失时回退 created_at 字符串解析（0 = 无法证明在先）
+  if ((Number(race.created_ts) || tsMs(race.created_at)) - 1000 > tsMs(policy.created_at)) {
+    res.reason = '保单生效于该场比赛之后，事故不在保障范围'
+    return res
+  }
+  res.policy = policy
+  if (!filed) res.canReport = true
+  else if (inc.status === 'reported') { res.canReport = true; res.canAssess = true }
+  else if (inc.status === 'assessed') { res.canPayout = true }
+  else res.reason = '该理赔单已结案'
+  return res
+}
+// 定损核算：只根据事故快照的出赛艇归属计算，金额完全服务端核定，客户端提交一律忽略。
+//  - 租约艇：事故损伤已计入租约 wear_total（将在归还时按费率扣押金），按租约快照费率定损；
+//    租约已归还则按实际磨损费口径（回查租约行费率），赔付对冲的是租方承担的押金损失；
+//  - 自有艇：按统一维修单价定损，赔付可直接用于机库维修恢复部件。
+function assessIncident(inc) {
+  let repairRate = OWN_REPAIR_RATE, shipName = airship().name
+  const race = getRaceRow(inc.race_id)
+  let rec = null
+  try { rec = race ? JSON.parse(race.record) : null } catch (e) { rec = null }
+  const rtSnapId = rec?.factors?.rental?.id
+  if (rtSnapId) {
+    // 租约艇出赛：事故损伤已计入 wear_total（归还时按费率扣押金），按租约快照费率定损，
+    // 保险赔付对冲的正是租方要承担的这部分押金损失
+    const rt = get('SELECT * FROM rentals WHERE id=?', rtSnapId)
+    if (rt) { repairRate = rt.wear_rate; shipName = rt.name }
+  }
+  const repairCost = (inc.damage || 0) * repairRate
+  return { repairCost, assessed: repairCost, shipName }
+}
+// 对外保险视图：方案目录 + 当季保单 + 本季事故清单（含尚未报案的已结算事故）+ 赛季统计
+function insurancePayload(season = teamCore().season) {
+  const policy = currentPolicy(season)
+  // 本季全部「已结算且未作废」且带事故快照的比赛：有物理理赔单的以单子状态为准，
+  // 尚未报案的给出 filed=false 的视图供前端渲染「报案」入口
+  const settled = all("SELECT * FROM races WHERE status='settled' AND settled=1 AND season=? ORDER BY id DESC", season)
+  const incidents = []
+  // 每条事故附上服务端判定的可执行动作（按钮置灰与提示与接口口径完全一致）
+  const eligOf = (raceRow, filedInc) => {
+    const e = claimEligibility(filedInc || { race_id: raceRow.id, status: 'unfiled' }, season, !!filedInc)
+    return { canReport: !!e.canReport, canAssess: !!e.canAssess, canPayout: !!e.canPayout, reason: e.reason || '' }
+  }
+  settled.forEach(race => {
+    let rec = null
+    try { rec = JSON.parse(race.record) } catch (e) { rec = null }
+    if (!rec?.incident) return
+    const existing = get('SELECT * FROM incidents WHERE race_id=?', race.id)
+    if (existing) {
+      const v = incidentBrief(season, race.id)
+      v.elig = eligOf(race, existing)
+      incidents.push(v)
+      return
+    }
+    const lv = INCIDENT_LEVELS[rec.incident.level]
+    const cir = rec.circuit
+    incidents.push({
+      id: null, raceId: race.id, season,
+      circuit: { id: cir.id, name: cir.name, weather: cir.weather, diff: cir.diff },
+      rank: race.rank, level: rec.incident.level, levelLabel: lv?.label || rec.incident.level,
+      repLoss: lv?.repLoss || 0, cause: rec.incident.cause, damage: rec.incident.damage,
+      ship: rec.factors?.rental ? { kind: 'rental', name: rec.factors.rental.name } : { kind: 'own', name: airship().name },
+      repairCost: 0, assessed: 0, payout: 0, status: 'unfiled', claimId: null,
+      reportedAt: null, assessedAt: null, paidAt: null, rejectedAt: null,
+      elig: eligOf(race, null)
+    })
+  })
+  const stats = seasonLiveStats(season)
+  return {
+    plans: INSURANCE_PLANS.map(p => ({ ...p })),
+    policy: policy ? {
+      id: policy.id, planId: policy.plan_id, name: policy.name, season: policy.season,
+      premium: policy.premium, coverage: policy.coverage, maxPayout: policy.max_payout,
+      status: policy.status, claimedIncidentId: policy.claimed_incident_id,
+      createdAt: policy.created_at, claimedAt: policy.claimed_at, expiredAt: policy.expired_at
+    } : null,
+    incidents,
+    season,
+    stats: { incidents: stats.incidents, payouts: stats.payouts },
+    // 此刻是否允许为当季投保（无保单且无进行中比赛；已有有效保单则只能用不能再买）
+    canInsure: !policy && !get("SELECT id FROM races WHERE status='running' LIMIT 1")
+  }
+}
+// 投保：客户端只提交方案 id；价格/比例以服务端配置核定。同事务完成
+// 「无保单 → 非赛中 → 资金校验 → 扣款 → 建单」，每赛季至多一份，重复/并发不产生两张单。
+function buyInsurance(planId) {
+  const cfg = INSURANCE_MAP.get(planId)
+  if (!cfg) return { status: 400, body: { ok: false, msg: '保险方案不存在' } }
+  let result
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    const t = teamCore()
+    const season = Number(t.season) || 1
+    if (currentPolicy(season)) {
+      result = { status: 409, body: { ok: false, msg: '本赛季已持有保单，一份保单当季有效' } }
+    } else if (get("SELECT id FROM races WHERE status='running' LIMIT 1")) {
+      // 与租艇签约同口径：赛中投保会让「先出事后补保」无从拦截，一律拒绝
+      result = { status: 409, body: { ok: false, msg: '比赛进行中，完赛结算后方可投保' } }
+    } else if (t.money < cfg.premium) {
+      result = { status: 400, body: { ok: false, msg: '资金不足，无法支付保险费', price: cfg.premium } }
+    } else {
+      run('UPDATE team SET money=money-? WHERE id=1', cfg.premium)
+      const r = run(`INSERT INTO insurance (plan_id,name,season,premium,coverage,max_payout,status,created_at)
+        VALUES (?,?,?,?,?,?,'active',?)`,
+        cfg.id, cfg.name, season, cfg.premium, cfg.coverage, cfg.maxPayout, String(Date.now()))
+      result = { status: 200, body: { ok: true, msg: `已投保「${cfg.name}」，保险费 ¥${cfg.premium}（当季有效，理赔一次）`, id: Number(r.lastInsertRowid) } }
+    }
+    db.exec('COMMIT')
+  } catch (e) {
+    db.exec('ROLLBACK')
+    console.error('[SKY] 投保失败', e)
+    result = { status: 500, body: { ok: false, msg: '投保失败，请重试' } }
+  }
+  return result
+}
+// 报案：只有比赛记录中确有事故且该场已结算才能立案；幂等（重复报案返回同一张单）
+function reportIncident(raceId) {
+  const race = getRaceRow(raceId)
+  if (!race) return { status: 404, body: { ok: false, msg: '比赛记录不存在' } }
+  let rec = null
+  try { rec = JSON.parse(race.record) } catch (e) { rec = null }
+  if (!rec?.incident) return { status: 400, body: { ok: false, msg: '该场比赛没有发生事故，无需报案' } }
+  if (race.status !== 'settled' || !race.settled) return { status: 409, body: { ok: false, msg: '比赛完赛结算后才能报案' } }
+  let result
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    const exist = get('SELECT * FROM incidents WHERE race_id=?', race.id)
+    if (exist) {
+      if (exist.status === 'void') result = { status: 409, body: { ok: false, msg: '该事故记录已随比赛作废' } }
+      else if (exist.status === 'rejected') result = { status: 409, body: { ok: false, msg: '该理赔单已随赛季结束拒付结案' } }
+      else result = { status: 200, body: { ok: true, already: true, incident: incidentBrief(exist.season, race.id) } }
+    } else {
+      const t = teamCore()
+      if (race.season !== (Number(t.season) || 1)) {
+        result = { status: 409, body: { ok: false, msg: '该事故属于往季赛事，保险责任已终止' } }
+      } else {
+        run(`INSERT INTO incidents (race_id,season,circuit_id,level,cause,damage,status,created_at,reported_at)
+          VALUES (?,?,?,?,?,?,'reported',?,?)`,
+          race.id, race.season, race.circuit_id, rec.incident.level, rec.incident.cause,
+          rec.incident.damage, race.created_at || now(), now())
+        result = { status: 200, body: { ok: true, already: false, incident: incidentBrief(race.season, race.id) } }
+      }
+    }
+    db.exec('COMMIT')
+  } catch (e) {
+    db.exec('ROLLBACK')
+    console.error('[SKY] 事故报案失败', e)
+    result = { status: 500, body: { ok: false, msg: '报案失败，请重试' } }
+  }
+  return result
+}
+// 定损：金额全部服务端核定（出赛艇归属 × 损伤点数），重复定损幂等返回同一结果
+function assessIncidentById(incidentId) {
+  const inc = get('SELECT * FROM incidents WHERE id=?', incidentId)
+  if (!inc) return { status: 404, body: { ok: false, msg: '理赔单不存在' } }
+  if (inc.status === 'void') return { status: 409, body: { ok: false, msg: '该理赔单已随比赛作废' } }
+  if (inc.season !== (Number(teamCore().season) || 1)) {
+    return { status: 409, body: { ok: false, msg: '该事故属于往季赛事，保险责任已终止' } }
+  }
+  if (inc.status === 'paid') return { status: 200, body: { ok: true, already: true, incident: incidentBrief(inc.season, inc.race_id) } }
+  if (inc.status === 'rejected') return { status: 409, body: { ok: false, msg: '该理赔单已拒付结案' } }
+  let result
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    const cur = get('SELECT * FROM incidents WHERE id=?', inc.id)
+    if (cur.status === 'assessed' || cur.status === 'paid') {
+      result = { status: 200, body: { ok: true, already: true, incident: incidentBrief(cur.season, cur.race_id) } }
+    } else if (cur.status !== 'reported') {
+      result = { status: 409, body: { ok: false, msg: '当前状态不能定损' } }
+    } else {
+      const a = assessIncident(cur)
+      run('UPDATE incidents SET repair_cost=?, assessed=?, status=?, assessed_at=? WHERE id=?',
+        a.repairCost, a.assessed, 'assessed', now(), cur.id)
+      result = { status: 200, body: { ok: true, already: false, incident: incidentBrief(cur.season, cur.race_id) } }
+    }
+    db.exec('COMMIT')
+  } catch (e) {
+    db.exec('ROLLBACK')
+    console.error('[SKY] 定损失败', e)
+    result = { status: 500, body: { ok: false, msg: '定损失败，请重试' } }
+  }
+  return result
+}
+// 赔付：当季有效保单（且先于开赛）→ 按 coverage 与单次上限核定赔款 → 资金到账、保单结案。
+// 以 incidents.status='assessed' 为唯一闸门（事务内二次校验），重复/并发只赔一次。
+function payoutIncident(incidentId) {
+  const inc = get('SELECT * FROM incidents WHERE id=?', incidentId)
+  if (!inc) return { status: 404, body: { ok: false, msg: '理赔单不存在' } }
+  if (inc.status === 'void') return { status: 409, body: { ok: false, msg: '该理赔单已随比赛作废' } }
+  if (inc.status === 'rejected') return { status: 409, body: { ok: false, msg: '该理赔单已拒付结案' } }
+  if (inc.season !== (Number(teamCore().season) || 1)) {
+    return { status: 409, body: { ok: false, msg: '该事故属于往季赛事，保险责任已终止' } }
+  }
+  if (inc.status === 'paid') return { status: 200, body: { ok: true, already: true, incident: incidentBrief(inc.season, inc.race_id) } }
+  if (inc.status !== 'assessed') return { status: 409, body: { ok: false, msg: '请先完成定损再申请赔付' } }
+  const elig = claimEligibility(inc, inc.season)
+  if (!elig.policy) return { status: 409, body: { ok: false, msg: elig.reason || '当前不满足赔付条件' } }
+  const policy = elig.policy
+  let result
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    const cur = get('SELECT * FROM incidents WHERE id=?', inc.id)
+    const pol = get('SELECT * FROM insurance WHERE id=?', policy.id)
+    const race = getRaceRow(cur.race_id)
+    if (cur.status === 'paid') {
+      result = { status: 200, body: { ok: true, already: true, incident: incidentBrief(cur.season, cur.race_id) } }
+    } else if (cur.status !== 'assessed') {
+      result = { status: 409, body: { ok: false, msg: '请先完成定损再申请赔付' } }
+    } else if (!pol || pol.status !== 'active' || pol.claimed_incident_id) {
+      result = { status: 409, body: { ok: false, msg: '保单已失效或本季理赔机会已使用' } }
+    } else if ((Number(race.created_ts) || tsMs(race.created_at)) - 1000 > tsMs(pol.created_at)) {
+      result = { status: 409, body: { ok: false, msg: '保单生效于该场比赛之后，事故不在保障范围' } }
+    } else {
+      const payout = Math.min(Math.round(cur.assessed * pol.coverage), pol.max_payout)
+      run('UPDATE team SET money=money+? WHERE id=1', payout)
+      run("UPDATE incidents SET status='paid', payout=?, claim_id=?, paid_at=? WHERE id=?",
+        payout, pol.id, now(), cur.id)
+      run("UPDATE insurance SET status='claimed', claimed_incident_id=?, claimed_at=? WHERE id=?",
+        cur.id, now(), pol.id)
+      result = {
+        status: 200,
+        body: { ok: true, already: false, payout, assessed: cur.assessed, coverage: pol.coverage, incident: incidentBrief(cur.season, cur.race_id) }
+      }
+    }
+    db.exec('COMMIT')
+  } catch (e) {
+    db.exec('ROLLBACK')
+    console.error('[SKY] 保险赔付失败', e)
+    result = { status: 500, body: { ok: false, msg: '赔付失败，请重试' } }
+  }
+  return result
 }
 
 // 历史数据兼容（迁移补偿）：修复「跳站参赛」产生的脏数据——首个未完成赛站之后的
@@ -760,7 +1143,7 @@ function reconcileLegacySkips() {
 
   db.exec('BEGIN')
   try {
-    let ptsBack = 0, moneyBack = 0, repBack = 0, refundBack = 0, racesVoided = 0
+    let ptsBack = 0, moneyBack = 0, repBack = 0, refundBack = 0, payoutBack = 0, repIncBack = 0, racesVoided = 0
     skipped.forEach(c => {
       // 已被 races 记录认领的流水 id：其数额随记录回滚，兜底循环里不得再统计，避免双重回滚
       const claimedLogIds = new Set()
@@ -770,6 +1153,8 @@ function reconcileLegacySkips() {
           const g = reverseSettledRace(rw, c)
           ptsBack += g.pts; moneyBack += g.money; repBack += g.repGain
           refundBack += g.refundAdd   // 已归还租约需补退的磨损费（回写租约行，由这里统一给钱）
+          payoutBack += g.payoutBack // 已理赔结案需冲回的保险赔付金（保单同步恢复有效）
+          repIncBack += g.repIncidentBack // 事故声望扣减随作废恢复
           if (rw.id) all('SELECT id FROM race_log WHERE race_id=?', rw.id).forEach(l => claimedLogIds.add(l.id))
         }
         run("UPDATE races SET status='void', settled=0, voided_at=? WHERE id=?", now(), rw.id)
@@ -787,11 +1172,13 @@ function reconcileLegacySkips() {
       console.log(`[SKY] 历史修复：赛站《${c.name}》在前置赛站未完成时已完赛（名次 ${c.rank}），回滚战绩、奖励、磨损与人员经验`)
       run('UPDATE circuits SET finished=0, rank=NULL WHERE id=?', c.id)
     })
-    // 奖金/声望冲回，押金磨损费补退（refundBack）——全部资金改动在同一边界一次完成
-    const netMoney = moneyBack - refundBack
-    if (ptsBack || netMoney || repBack) {
+    // 奖金/声望冲回，押金磨损费补退（refundBack）、保险理赔冲回（payoutBack）
+    // ——全部资金改动在同一边界一次完成
+    const netMoney = moneyBack + payoutBack - refundBack
+    const netRep = Math.max(0, repBack - repIncBack)
+    if (ptsBack || netMoney || netRep) {
       run('UPDATE team SET season_pts=MAX(0,season_pts-?), money=money-?, rep=MAX(0,rep-?) WHERE id=1',
-        ptsBack, netMoney, repBack)
+        ptsBack, netMoney, netRep)
     }
 
     reconcileContracts()
@@ -799,9 +1186,10 @@ function reconcileLegacySkips() {
     run('UPDATE team SET season_pos=? WHERE id=1', ranks.length ? Math.max(1, Math.min(...ranks)) : 1)
     db.exec('COMMIT')
     console.log(`[SKY] 历史修复完成：作废 ${racesVoided} 条越站比赛记录（${skipped.length} 个赛站），` +
-      `积分 -${ptsBack}，奖金 -${moneyBack}，声望 -${repBack}` +
+      `积分 -${ptsBack}，奖金 -${moneyBack}，声望 -${netRep}` +
       (refundBack ? `，补退已归还租约磨损费 +${refundBack}` : '') +
-      '，部件磨损与人员经验已按记录冲回')
+      (payoutBack ? `，冲回保险理赔款 -${payoutBack}` : '') +
+      '，部件磨损、事故理赔与人员经验已按记录冲回')
   } catch (e) {
     db.exec('ROLLBACK')
     console.error('[SKY] 历史修复失败，已回滚本次迁移补偿', e)
@@ -827,6 +1215,7 @@ const payload = () => {
   const mechanics = all('SELECT * FROM mechanics')
   const circuits = orderedCircuits()
   const contracts = contractsPayload(t.season)
+  const insurance = insurancePayload(t.season)
   const log = all('SELECT * FROM race_log ORDER BY id DESC')
   const done = circuits.filter(c => c.finished).length
   // 中断续看：当前未结算的比赛（每场仅一场 running）；history 供历史回放
@@ -834,6 +1223,8 @@ const payload = () => {
   const raceRows = all("SELECT * FROM races WHERE status='settled' ORDER BY id DESC")
   return {
     team: t, airship: st, upgrades, pilots, mechanics, circuits, contracts, log,
+    // 赛事保险：方案目录 + 当季保单 + 本季事故理赔单（含未报案）+ 事故/赔付统计
+    insurance,
     shop: SHOP_ITEMS,
     // 赛事排班：原始排班 + 下一站实际出赛阵容（机师/技工/出赛艇）
     lineup: lineupPayload(),
@@ -1091,8 +1482,8 @@ app.post('/api/races/start/:cid', (req, res) => {
   }
 
   const record = buildRace(c)
-  const r = run('INSERT INTO races (circuit_id, season, status, settled, record, watch_el, created_at) VALUES (?,?,?,?,?,?,?)',
-    c.id, record.season, 'running', 0, JSON.stringify(record), 0, now())
+  const r = run('INSERT INTO races (circuit_id, season, status, settled, record, watch_el, created_at, created_ts) VALUES (?,?,?,?,?,?,?,?)',
+    c.id, record.season, 'running', 0, JSON.stringify(record), 0, now(), Date.now())
   res.json({ ok: true, resumed: false, race: parseRace(getRaceRow(Number(r.lastInsertRowid))) })
 })
 
@@ -1134,9 +1525,43 @@ app.post('/api/seasons/advance', (_, res) => {
   return res.status(r.status).json(r.body)
 })
 
+/* ---------- 赛事保险：投保 / 事故清单 / 报案 / 定损 / 赔付（状态机 + 幂等） ---------- */
+
+// 保险视图：方案目录、当季保单、本季事故理赔单与赛季事故统计
+app.get('/api/insurance', (_, res) => res.json({ ok: true, ...insurancePayload() }))
+
+// 投保：客户端只提交方案 id；保险费/赔付比例/上限均由服务端配置核定。
+// 每赛季至多一份，赛中拒绝（防先出事后补保），扣款与建单在同一事务原子完成
+app.post('/api/insurance/buy', (req, res) => {
+  const rawId = req.body?.id
+  if (typeof rawId !== 'number' || !Number.isInteger(rawId) || rawId <= 0) {
+    return res.status(400).json({ ok: false, msg: '保险方案编号无效' })
+  }
+  const r = buyInsurance(rawId)
+  return res.status(r.status).json(r.body)
+})
+
+// 报案：以比赛记录中的事故快照为事实依据，只有已结算比赛可立案；重复报案幂等
+app.post('/api/incidents/:raceId/report', (req, res) => {
+  const r = reportIncident(Number(req.params.raceId))
+  return res.status(r.status).json(r.body)
+})
+
+// 定损：金额完全由服务端按出赛艇归属（自有艇维修费 / 租约艇磨损费）核定
+app.post('/api/incidents/:id/assess', (req, res) => {
+  const r = assessIncidentById(Number(req.params.id))
+  return res.status(r.status).json(r.body)
+})
+
+// 赔付：当季有效保单（且先于开赛）按 coverage × 定损额（上限封顶）一次到账，保单结案；幂等
+app.post('/api/incidents/:id/payout', (req, res) => {
+  const r = payoutIncident(Number(req.params.id))
+  return res.status(r.status).json(r.body)
+})
+
 // 重置（重置数据到初始种子）
 app.post('/api/reset', (_, res) => {
-  ['race_log', 'races', 'rentals', 'contracts', 'seasons', 'circuits', 'upgrades', 'mechanics', 'pilots', 'airships', 'team', 'lineup'].forEach(t => { try { run(`DELETE FROM ${t}`) } catch (e) {} })
+  ['race_log', 'races', 'rentals', 'contracts', 'seasons', 'circuits', 'upgrades', 'mechanics', 'pilots', 'airships', 'team', 'lineup', 'insurance', 'incidents'].forEach(t => { try { run(`DELETE FROM ${t}`) } catch (e) {} })
   try { run('DELETE FROM sqlite_sequence') } catch (e) {}
   seed()
   ensureLineup()

@@ -127,19 +127,28 @@ async function scenario() {
 
     /* ---- 6. 跨赛季资产保留：资金/声望/飞艇磨损/租约 ---- */
     const prize1 = log1.reduce((a, l) => a + l.money, 0)
+    // 6 场比赛记录中的事故快照：事故损伤与事故声望扣减（严重-1/坠毁-3）随赛季滚动
+    const s1Recs = sFull.races.filter(r => r.record?.season === 1).map(r => r.record)
+    const incRepLoss = s1Recs.reduce((a, rec) => a + (rec.incident ? { minor: 0, major: 1, crash: 3 }[rec.incident.level] || 0 : 0), 0)
+    const incDamageOwn = s1Recs
+      .filter(rec => !rec.factors?.rental)
+      .reduce((a, rec) => a + (rec.incident?.damage || 0), 0)
+    const incDamageRental = s1Recs
+      .filter(rec => !!rec.factors?.rental)
+      .reduce((a, rec) => a + (rec.incident?.damage || 0), 0)
     // 第 1 季资金 = 初始 -（押金+租金）+ 各站奖金 + 当场兑现合约奖励；衔接后数额原封不动
     const earnedInS1 = sFull.contracts.filter(c => c.earned).reduce((a, c) => a + c.reward, 0)
     const expectedMoney = money0 - (2400 + 600) + prize1 + earnedInS1
     eq('资金跨赛季保留（含第 1 季合约兑现）', Math.round(s2.team.money), Math.round(expectedMoney))
     const repGain1 = sFull.seasons.find(x => x.season === 1).rep
     const repContracts = sFull.contracts.filter(c => c.earned).reduce((a, c) => a + c.rep, 0)
-    eq('声望跨赛季保留', s2.team.rep, rep0 + repGain1 + repContracts)
+    eq('声望跨赛季保留（含事故扣减）', s2.team.rep, rep0 + repGain1 + repContracts - incRepLoss)
     const ownWearTotal = ownWears.reduce((a, w) => a + w, 0)
-    eq('自有艇磨损跨赛季保留（第 2-6 站累计）', s2.airship.parts_dur, Math.max(10, ownPd0 - ownWearTotal))
+    eq('自有艇磨损跨赛季保留（第 2-6 站累计，含事故损伤）', s2.airship.parts_dur, Math.max(5, ownPd0 - ownWearTotal - incDamageOwn))
     const rt = s2.rental
     ok('在履租约跨赛季保留', !!rt && rt.status === 'active')
     eq('租约已用场次跨赛季保留（仍为 1）', rt.races_used, 1)
-    eq('租约累计磨损跨赛季保留', rt.wear_total, rentalWear)
+    eq('租约累计磨损跨赛季（正常磨损+事故损伤）', rt.wear_total, rentalWear + incDamageRental)
     eq('租约剩余场次保留（还能再跑 1 场）', rt.max_races - rt.races_used, 1)
 
     /* ---- 7. 排行榜按赛季分层：第 1 季归档行 + 第 2 季滚动行 ---- */
@@ -216,7 +225,11 @@ async function scenario() {
     eq('重启后积分不被重复重置/补发', sr.team.season_pts, n1.race.record.result.pts)
     eq('重启后赛季榜仍为 2 行', sr.seasons.length, 2)
     ok('S1 归档行重启后仍在', sr.seasons.some(x => x.season === 1 && !x.current))
-    eq('第 2 季合约进度不因重启重复兑现', sr.contracts.every(c => !c.earned), true)
+    // 重启幂等的正确口径：已兑现合约集合在重启前后完全一致（第 1 站若已满足条款，
+    // 该合约本就应在结算事务内兑现；重启对账只保持状态、绝不二次发奖）
+    const earnedBefore = s3.contracts.filter(c => c.earned).map(c => c.id).sort()
+    const earnedAfter = sr.contracts.filter(c => c.earned).map(c => c.id).sort()
+    eq('重启前后已兑现合约集合一致（不重复兑现）', JSON.stringify(earnedAfter), JSON.stringify(earnedBefore))
 
     /* ---- 13. 存在 running 比赛时拒绝衔接（保护唯一事实来源） ---- */
     await post(PORT, '/api/races/start/2', {})

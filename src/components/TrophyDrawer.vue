@@ -50,6 +50,7 @@ const rankTxt = r => (r == null ? '—' : '第 ' + r + ' 名')
               <span class="sb-pts mono">{{ s.pts }}<em>分</em></span>
               <span class="sb-pos">{{ s.current ? '暂列 ' : '最终 ' }}{{ rankTxt(s.bestPos) }}</span>
               <span class="sb-meta mono">{{ s.wins }}🏆 · {{ s.podiums }}🥉 · {{ s.racesN }}站</span>
+              <span class="sb-inc mono" :class="{ bad: s.incidents > 0 }">💥 {{ s.incidents }} · 🛡️¥{{ s.payouts || 0 }}</span>
               <span v-if="s.current" class="tag o sb-tag">进行中</span>
               <span v-else class="tag m sb-tag">已归档</span>
             </div>
@@ -94,6 +95,7 @@ const rankTxt = r => (r == null ? '—' : '第 ' + r + ' 名')
                   <span class="rname">
                     <em class="rseq">{{ stationName(l.seq) }}</em>{{ l.record.circuit.name }}
                     <em class="rweather">{{ wIco[l.record.circuit.weather] }} {{ l.record.circuit.weather }}</em>
+                    <em v-if="l.record.incident" class="rincident" :title="l.record.incident.cause">💥 {{ ({ minor: '轻微', major: '严重', crash: '坠毁' })[l.record.incident.level] }}</em>
                   </span>
                   <span class="rmedal" :class="'m' + l.rank">{{ l.rank <= 3 ? ['🥇','🥈','🥉'][l.rank-1] : '🌊' }}</span>
                   <span class="rpts mono">+{{ l.pts }} 分</span>

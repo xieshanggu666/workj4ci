@@ -11,6 +11,12 @@ const spots = [
   { x: 660, y: 290 }, { x: 828, y: 225 }, { x: 955, y: 170 }
 ]
 const circuits = computed(() => store.circuits)
+// 当前赛季各完赛赛站是否发生过事故（结算后的比赛记录带 incident 快照），航线上以 💥 标记
+const incidentCircuitIds = computed(() => new Set(
+  (store.raceHistory || [])
+    .filter(r => r.record?.season === store.team.season && r.record?.incident)
+    .map(r => r.record.circuit.id)
+))
 // 赛季进度与航线解锁规则前后端一致：已完赛赛站数即进度，当前待赛站为第一个未完成站
 const done = computed(() => circuits.value.filter(c => c.finished).length)
 const total = computed(() => store.state?.seasonTotal || circuits.value.length || 6)
@@ -126,6 +132,8 @@ function resume() { if (active.value) emit('view', active.value, 'live') }
               <text :x="c.weather === '晴' ? 0 : -14" y="24" text-anchor="middle" font-size="12" fill="#9fc1ff">{{ wIco[c.weather] }} {{ c.weather }} · 难度{{ '★'.repeat(c.diff) }}</text>
               <!-- 完赛标记 -->
               <text v-if="c.finished" y="40" text-anchor="middle" font-size="13" font-weight="800" fill="#6fe7d0">✔ {{ fmt(c) }}</text>
+              <!-- 事故标记：该站完赛记录中发生过事故（理赔在「赛事保险」抽屉处理） -->
+              <text v-if="c.finished && incidentCircuitIds.has(c.id)" y="57" text-anchor="middle" font-size="12">💥</text>
             </g>
           </g>
         </g>

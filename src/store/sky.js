@@ -28,6 +28,8 @@ export const useSkyStore = defineStore('sky', {
     lineup: s => s.state?.lineup || null,
     // 历届赛季榜（归档赛季 + 当前赛季滚动行，新季在前）
     seasons: s => s.state?.seasons || [],
+    // 赛事保险：方案目录 / 当季保单 / 本季事故理赔单（含未报案）/ 事故统计
+    insurance: s => s.state?.insurance || { plans: [], policy: null, incidents: [], stats: { incidents: 0, payouts: 0 }, canInsure: false },
     // 当前赛季 6 站是否已全部完赛（尚未衔接新赛季）
     seasonComplete: s => !!s.state?.seasonComplete
   },
@@ -59,6 +61,12 @@ export const useSkyStore = defineStore('sky', {
     async settleRace(raceId) { return await post(`/api/races/${raceId}/settle`) },
     // 进入新赛季：归档老赛季排行榜，重置积分/赛站/合约；老赛季战绩与回放保留
     async advanceSeason() { return await post('/api/seasons/advance') },
+    // 赛事保险：投保（只提交方案 id）
+    async buyInsurance(id) { const r = await post('/api/insurance/buy', { id }); await this.refresh(); if (!r.ok) this.tip(r.msg); return r },
+    // 事故理赔：报案（提交比赛 id）→ 定损 → 赔付（提交理赔单 id），每步服务端状态机幂等
+    async reportIncident(raceId) { const r = await post(`/api/incidents/${raceId}/report`); await this.refresh(); if (!r.ok) this.tip(r.msg); return r },
+    async assessIncident(id) { const r = await post(`/api/incidents/${id}/assess`); await this.refresh(); if (!r.ok) this.tip(r.msg); return r },
+    async payoutIncident(id) { const r = await post(`/api/incidents/${id}/payout`); await this.refresh(); if (!r.ok) this.tip(r.msg); return r },
     async reset() { await post('/api/reset'); await this.init() }
   }
 })

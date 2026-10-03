@@ -113,11 +113,12 @@ async function scenario() {
     eq('记录为租约艇出赛', r3.race.record.factors.rental.name, '雨燕·轻竞技')
     eq('记录排班快照=rental', r3.race.record.factors.lineup.shipMode, 'rental')
     const wear3 = r3.race.record.result.wear
+    const dmg3 = r3.race.record.incident?.damage || 0
     await post(PORT, `/api/races/${r3.race.id}/settle`, {})
     const s5 = await api(PORT, '/api/state')
     eq('租约场次计入', s5.rental.races_used, 1)
-    eq('租约累计磨损计入', s5.rental.wear_total, wear3)
-    eq('出赛艇镜像租约艇部件健康', s5.airship.parts_dur, 100 - wear3)
+    eq('租约累计磨损计入（含事故损伤）', s5.rental.wear_total, wear3 + dmg3)
+    eq('出赛艇镜像租约艇部件健康', s5.airship.parts_dur, 100 - wear3 - dmg3)
     const maintainDenied = await post(PORT, '/api/maintain', {})
     eq('租约艇出赛排班下维护被拒', maintainDenied.ok, false)
 
@@ -128,13 +129,15 @@ async function scenario() {
     const r4 = await post(PORT, '/api/races/start/4', {})
     ok('第 4 站开赛成功', r4.ok)
     eq('记录为自有艇出赛（无租约快照）', r4.race.record.factors.rental, null)
-    // 自有艇累计磨损 = 第 1、2 站（租约前）+ 第 4 站（排班自有艇）；第 3 站租约艇出赛不计
-    const ownWear = r1.race.record.result.wear + r2.race.record.result.wear + r4.race.record.result.wear
+    // 自有艇累计磨损 = 第 1、2 站（租约前）+ 第 4 站（排班自有艇）；第 3 站租约艇出赛不计。
+    // 事故损伤与正常磨损同口径归属出赛艇，一并计入
+    const recWear = r => r.race.record.result.wear + (r.race.record.incident?.damage || 0)
+    const ownWear = recWear(r1) + recWear(r2) + recWear(r4)
     await post(PORT, `/api/races/${r4.race.id}/settle`, {})
     const s6 = await api(PORT, '/api/state')
-    eq('自有艇按各场记录累计磨损（租约场不计）', s6.airship.parts_dur, 100 - ownWear)
+    eq('自有艇按各场记录累计磨损（租约场不计，含事故）', s6.airship.parts_dur, 100 - ownWear)
     eq('租约场次未被消耗', s6.rental.races_used, 1)
-    eq('租约磨损未增加', s6.rental.wear_total, wear3)
+    eq('租约磨损未增加', s6.rental.wear_total, wear3 + dmg3)
     const maintainOk = await post(PORT, '/api/maintain', {})
     ok('自有艇出赛排班下可维护', maintainOk.ok)
     const s7 = await api(PORT, '/api/state')

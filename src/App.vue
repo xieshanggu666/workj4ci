@@ -5,11 +5,12 @@ import MainScene from '@/components/MainScene.vue'
 import RaceAnim from '@/components/RaceAnim.vue'
 import HangarDrawer from '@/components/HangarDrawer.vue'
 import TrophyDrawer from '@/components/TrophyDrawer.vue'
+import InsuranceDrawer from '@/components/InsuranceDrawer.vue'
 
 const store = useSkyStore()
 store.init()
 
-const drawer = ref('')            // '' | 'hangar' | 'trophy'
+const drawer = ref('')            // '' | 'hangar' | 'trophy' | 'insurance'
 // 当前观看的比赛：{ race, mode: 'live' | 'replay' }，三者（动画/实时排名/结算卡）共用同一份记录
 const viewing = ref(null)
 
@@ -21,6 +22,13 @@ async function goBack() {
 }
 function openHangar() { drawer.value = drawer.value === 'hangar' ? '' : 'hangar' }
 function openTrophy() { drawer.value = drawer.value === 'trophy' ? '' : 'trophy' }
+function openInsurance() { drawer.value = drawer.value === 'insurance' ? '' : 'insurance' }
+// 结算卡「去理赔」：关掉比赛镜头并直接打开保险抽屉
+async function gotoClaim() {
+  viewing.value = null
+  await store.refresh()
+  drawer.value = 'insurance'
+}
 </script>
 
 <template>
@@ -45,11 +53,12 @@ function openTrophy() { drawer.value = drawer.value === 'trophy' ? '' : 'trophy'
     <MainScene class="scene" @view="openRace" />
 
     <!-- 竞速镜头：live（开赛/续看）或 replay（历史回放） -->
-    <RaceAnim v-if="viewing" :race="viewing.race" :mode="viewing.mode" @back="goBack" />
+    <RaceAnim v-if="viewing" :race="viewing.race" :mode="viewing.mode" @back="goBack" @claim="gotoClaim" />
 
     <!-- 右下操作钮 -->
     <div class="fab-col">
       <button class="fab" :class="{ on: drawer === 'trophy' }" @click="openTrophy">🏆<span>赛季之巅</span></button>
+      <button class="fab" :class="{ on: drawer === 'insurance' }" @click="openInsurance">🛡️<span>赛事保险</span></button>
       <button class="fab" :class="{ on: drawer === 'hangar' }" @click="openHangar">✈️<span>机库</span></button>
     </div>
 
@@ -59,6 +68,9 @@ function openTrophy() { drawer.value = drawer.value === 'trophy' ? '' : 'trophy'
     </transition>
     <transition name="slide">
       <div v-if="drawer === 'trophy'"><TrophyDrawer @close="drawer = ''" @replay="r => openRace(r, 'replay')" /></div>
+    </transition>
+    <transition name="slide">
+      <div v-if="drawer === 'insurance'"><InsuranceDrawer @close="drawer = ''" /></div>
     </transition>
   </div>
 </template>

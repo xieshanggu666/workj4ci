@@ -4,7 +4,7 @@ import { useSkyStore } from '@/store/sky'
 const store = useSkyStore()
 // race：服务器落库的比赛记录（动画 / 实时排名 / 最终奖励共用同一份）；mode: live=开赛/续看，replay=历史回放
 const props = defineProps({ race: { type: Object, required: true }, mode: { type: String, default: 'live' } })
-const emit = defineEmits(['back'])
+const emit = defineEmits(['back', 'claim'])
 
 const wIco = { '晴': '🌤️', '风': '🌬️', '雨': '🌧️', '雾': '🌫️', '雷暴': '⛈️' }
 const rec = computed(() => props.race.record)
@@ -18,6 +18,8 @@ const showFactors = ref(false)
 // 本场结算事务内一次性兑现（或因进度不足冲回）的赛季合约，幂等重放不重复展示
 const contractsPaid = ref([])
 const contractsRevoked = ref([])
+// 本场事故理赔单（结算响应携带；平安完赛为 null），结算卡据此展示事故损伤与「去理赔」
+const incident = ref(null)
 // 最后一站结算后：本季 6 站全部完赛，结算卡追加赛季总结与「进入新赛季」
 const seasonComplete = ref(false)
 const advancing = ref(false)
@@ -60,6 +62,18 @@ const activeEvent = computed(() => {
   return ev && now.value - ev.t < 2.4 ? ev : null
 })
 const result = computed(() => rec.value.result)
+// 事故视图：live 结算后用理赔单（含状态/定损），回放或刚结算时回退到比赛记录中的事故快照
+const LEVEL_LABEL = { minor: '轻微事故', major: '严重事故', crash: '坠毁事故' }
+const incidentView = computed(() => {
+  if (incident.value) return incident.value
+  const snap = rec.value.incident
+  if (!snap) return null
+  return {
+    level: snap.level, levelLabel: LEVEL_LABEL[snap.level] || snap.level,
+    cause: snap.cause, damage: snap.damage,
+    repLoss: { major: 1, crash: 3, minor: 0 }[snap.level] || 0
+  }
+})
 // 当前赛季滚动战绩（结算后由 /api/state 刷新；结算瞬间用 store 里的归档榜兜底）
 const seasonStats = computed(() =>
   store.seasons.find(x => x.current && x.season === rec.value.season) ||
@@ -98,6 +112,7 @@ async function finish() {
   if (r.ok) {
     contractsPaid.value = r.contractsPaid || []
     contractsRevoked.value = r.contractsRevoked || []
+    incident.value = r.incident || null
     seasonComplete.value = !!r.seasonComplete
     await store.refresh() // 拉齐积分/赛季榜，结算卡的赛季总结按最新滚动战绩渲染
     showSettle.value = true
@@ -222,10 +237,10 @@ onUnmounted(() => { if (raf) cancelAnimationFrame(raf) })
           <div class="pos" :class="{ 'pos-p': r.isPlayer }">{{ r.done ? '🏁' : rankLive.indexOf(r) + 1 }}</div>
         </div>
 
-        <!-- 分段事件横幅：超车 / 天气 -->
+        <!-- 分段事件横幅：超车 / 天气 / 事故 -->
         <transition name="pop">
           <div v-if="activeEvent" class="race-event" :class="activeEvent.type">
-            {{ activeEvent.type === 'overtake' ? '🔥 ' : '🌦️ ' }}{{ activeEvent.text }}
+            {{ activeEvent.type === 'overtake' ? '🔥 ' : activeEvent.type === 'incident' ? '💥 ' : '🌦️ ' }}{{ activeEvent.text }}
           </div>
         </transition>
       </div>
@@ -260,6 +275,21 @@ onUnmounted(() => { if (raf) cancelAnimationFrame(raf) })
           </div>
           <div class="s-row" v-else><span>部件磨损</span><b style="color:#ff9fb0">-{{ result.wear }}</b></div>
           <div class="s-row"><span>声望</span><b>+{{ result.repGain }}</b></div>
+
+          <!-- 赛事事故：事故损伤已随结算施加（自有艇→部件健康；租约艇→归还磨损费），
+               严重/坠毁另扣声望；live 已立案可跳转保险抽屉报案定损赔付，回放仅展示 -->
+          <template v-if="incidentView">
+            <div class="s-row s-incident" :class="'lv-' + incidentView.level">
+              <span>⚠ {{ incidentView.levelLabel }} · {{ incidentView.cause }}</span>
+              <b style="color:#ff9fb0">事故损伤 −{{ incidentView.damage }}</b>
+            </div>
+            <div v-if="incidentView.repLoss" class="s-row s-incident-sub">
+              <span>事故声望扣减</span><b style="color:#ff9fb0">−{{ incidentView.repLoss }}</b>
+            </div>
+            <button v-if="isLive && incident" class="btn ghost sm s-btn s-claim-btn" @click="emit('claim')">
+              🛡️ 前往保险 · 报案定损赔付
+            </button>
+          </template>
           <!-- 赛季合约在结算事务内一次性兑现（幂等，重放不重复发奖） -->
           <div v-for="c in contractsPaid" :key="'p' + c.id" class="s-row ct-pay">
             <span>🚩 合约兑现 · {{ c.name }}</span><b>+¥{{ c.reward }} · 声望+{{ c.rep }}</b>
@@ -278,6 +308,8 @@ onUnmounted(() => { if (raf) cancelAnimationFrame(raf) })
                 <span><b class="mono">{{ seasonStats.wins }}</b>夺冠</span>
                 <span><b class="mono">{{ seasonStats.podiums }}</b>登台</span>
                 <span><b class="mono">{{ seasonStats.bestRank ?? '—' }}</b>最佳名次</span>
+                <span><b class="mono">{{ seasonStats.incidents ?? 0 }}</b>事故</span>
+                <span><b class="mono">¥{{ seasonStats.payouts ?? 0 }}</b>保险赔付</span>
               </div>
               <div class="ss-note">资金、声望、飞艇、改装与班底保留；积分、赛站、合约与排行榜进入新赛季分层重置，往季回放可在「赛季之巅」随时观看</div>
               <button class="btn primary s-btn ss-go" :disabled="advancing" @click="startNewSeason">

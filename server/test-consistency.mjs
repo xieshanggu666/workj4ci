@@ -207,6 +207,8 @@ async function scenarioC() {
     ok('开赛成功', started.ok && started.race.id)
     const raceId = started.race.id
     const wear = started.race.record.result.wear
+    const incidentDmg = started.race.record.incident?.damage || 0
+    const totalWear = wear + incidentDmg  // 事故损伤随结算一并计入租约磨损
     const settled1 = await post(PORT, `/api/races/${raceId}/settle`, {})
     ok('首次结算成功', settled1.ok && !settled1.already)
     await api(PORT, '/api/state')
@@ -215,18 +217,18 @@ async function scenarioC() {
     ok('重复结算返回幂等结果', settled2.ok && settled2.already)
 
     const s3 = await api(PORT, '/api/state')
-    eq('租约累计磨损只记一次', s3.rental.wear_total, wear)
+    eq('租约累计磨损只记一次（含事故损伤）', s3.rental.wear_total, totalWear)
     eq('租约已用场次只记一次', s3.rental.races_used, 1)
     // payload 的 airship 在租约期间镜像租约艇（fleetStats 以租约为准）
-    eq('出赛艇（租约）部件健康=100−磨损', s3.rental.parts_dur, 100 - wear)
-    eq('出赛艇（租约）部件健康=100−磨损', s3.airship.parts_dur, 100 - wear)
+    eq('出赛艇（租约）部件健康=100−磨损', s3.rental.parts_dur, 100 - totalWear)
+    eq('出赛艇（租约）部件健康=100−磨损', s3.airship.parts_dur, 100 - totalWear)
     const expectMoney = moneyBefore - 3000 + started.race.record.result.money +
       s3.contracts.filter(x => x.earned).reduce((a, x) => a + x.reward, 0) // 结算事务内兑现的合约奖励
     eq('奖金（含同事务兑现的合约奖励）只发一次', s3.team.money, expectMoney)
 
     // 重复归还：仅一次退款
     const ret1 = await post(PORT, '/api/rentals/return', {})
-    const expectedFee = wear * 35
+    const expectedFee = totalWear * 35
     const expectedRefund = Math.max(0, 2400 - expectedFee)
     ok('首次归还成功', ret1.ok && !ret1.already)
     eq('磨损费=累计磨损×费率', ret1.wearFee, expectedFee)

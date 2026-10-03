@@ -90,6 +90,8 @@ CREATE TABLE IF NOT EXISTS seasons (
   best_rank INTEGER,                     -- 本赛季最佳分站名次
   best_pos INTEGER NOT NULL DEFAULT 1,   -- 赛季车队最终名次
   races_n INTEGER NOT NULL DEFAULT 0,    -- 已结算赛站数（完季 = 赛站总数）
+  incidents INTEGER NOT NULL DEFAULT 0,  -- 本赛季发生的赛事事故起数（轻微/严重/坠毁）
+  payouts INTEGER NOT NULL DEFAULT 0,    -- 本赛季保险理赔实际赔付总额
   finished_at TEXT
 );
 CREATE TABLE IF NOT EXISTS race_log (
@@ -136,6 +138,44 @@ CREATE TABLE IF NOT EXISTS lineup (
   ship_mode TEXT NOT NULL DEFAULT 'auto',
   updated_at TEXT
 );
+-- 保单：赛季开始可投保（每赛季一份），保险费不退，赛季结束（衔接）自然到期。
+-- status=active 有效（可报案）| expired 已到期（未用完的赛季失效）| claimed 本季已理赔结案
+CREATE TABLE IF NOT EXISTS insurance (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  plan_id INTEGER NOT NULL,
+  name TEXT NOT NULL,             -- 方案名称快照
+  season INTEGER NOT NULL,        -- 所属赛季（赛季分层：仅当季事故可报案）
+  premium INTEGER NOT NULL,       -- 保险费（投保即扣，不退）
+  coverage REAL NOT NULL,         -- 赔付比例（定损额 × coverage = 赔付额）
+  max_payout INTEGER NOT NULL,    -- 单次赔付上限
+  status TEXT NOT NULL DEFAULT 'active',
+  claimed_incident_id INTEGER,    -- 已理赔结案的事故 id（一案一季）
+  created_at TEXT,
+  claimed_at TEXT,
+  expired_at TEXT
+);
+-- 赛事事故与理赔单（一体）：事故在开赛瞬间随比赛记录确定性生成（incident 快照），
+-- 但只有已结算比赛才能报案——退赛/作废记录的事故不可理赔。一案一次赔付，全链路幂等。
+-- status: none 无事故（不建物理行）| reported 已报案待定损 | assessed 已定损待赔付 | paid 已赔付结案 | rejected 理赔拒付
+CREATE TABLE IF NOT EXISTS incidents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  race_id INTEGER NOT NULL UNIQUE,   -- 一场比赛至多一起事故
+  season INTEGER NOT NULL,
+  circuit_id INTEGER NOT NULL,
+  level TEXT NOT NULL,               -- minor 轻微 | major 严重 | crash 坠毁
+  cause TEXT NOT NULL DEFAULT '',    -- 事故情形（服务端文案）
+  damage INTEGER NOT NULL DEFAULT 0, -- 事故额外损伤（施加给出赛艇的部件/结构）
+  repair_cost INTEGER NOT NULL DEFAULT 0,  -- 定损维修费用（事故维修实际花费口径）
+  assessed INTEGER NOT NULL DEFAULT 0,     -- 定损总额（维修费用基准）
+  payout INTEGER NOT NULL DEFAULT 0,       -- 保险实际赔付
+  claim_id INTEGER,                        -- 理赔所用保单 id
+  status TEXT NOT NULL DEFAULT 'reported',
+  created_at TEXT,                         -- 事故发生（开赛）时间
+  reported_at TEXT,
+  assessed_at TEXT,
+  paid_at TEXT,
+  rejected_at TEXT
+);
 -- 比赛记录：动画 / 实时排名 / 最终奖励共用的唯一事实来源
 -- status=running 未完赛（可中断续看）；settled=1 已结算（奖励只发一次，可历史回放）
 CREATE TABLE IF NOT EXISTS races (
@@ -152,6 +192,7 @@ CREATE TABLE IF NOT EXISTS races (
   record TEXT NOT NULL,                    -- 分段过程、快照因素、事件与奖励（JSON）
   watch_el REAL NOT NULL DEFAULT 0,        -- 最近观赛进度（秒），中断续看
   created_at TEXT,
+  created_ts INTEGER,                      -- 开赛 epoch ms（保单生效先后的可靠判据）
   settled_at TEXT,
   voided_at TEXT                           -- 作废时间：越站迁移作废的记录，不再参与历史/结算
 );
@@ -161,6 +202,12 @@ CREATE TABLE IF NOT EXISTS races (
 try { db.exec('ALTER TABLE race_log ADD COLUMN race_id INTEGER') } catch (e) {}
 // 老库兼容：races 增加 voided_at 列（越站历史修复作废记录用）
 try { db.exec('ALTER TABLE races ADD COLUMN voided_at TEXT') } catch (e) {}
+// 老库兼容：races 增加 created_ts（epoch ms，保单是否先于开赛生效的可靠判据；
+// created_at 为本地化展示串，Date.parse 对中文格式不稳定）
+try { db.exec('ALTER TABLE races ADD COLUMN created_ts INTEGER') } catch (e) {}
+// 老库兼容：seasons 增加事故/理赔统计列（赛季事故与保险赔付归档用）
+try { db.exec('ALTER TABLE seasons ADD COLUMN incidents INTEGER NOT NULL DEFAULT 0') } catch (e) {}
+try { db.exec('ALTER TABLE seasons ADD COLUMN payouts INTEGER NOT NULL DEFAULT 0') } catch (e) {}
 
 export function run(sql, ...p) { return db.prepare(sql).run(...p) }
 export function all(sql, ...p) { return db.prepare(sql).all(...p) }
