@@ -18,8 +18,11 @@ async function buy(it) {
 
 /* ---------- 飞艇租赁 ---------- */
 const rental = computed(() => store.rental)
-// 归还结算预览：按当前累计磨损估算（最终以归还时服务端结算为准）
-const wearFeeNow = computed(() => rental.value ? rental.value.wear_total * rental.value.wear_rate : 0)
+// 归还结算预览：已由保险赔付覆盖的事故损伤（insured_wear）不计押金磨损，
+// 计费基数 = 累计磨损 − 保险覆盖（最终以归还时服务端结算为准）
+const billableWear = computed(() =>
+  rental.value ? Math.max(0, rental.value.wear_total - (rental.value.insured_wear || 0)) : 0)
+const wearFeeNow = computed(() => rental.value ? billableWear.value * rental.value.wear_rate : 0)
 const refundNow = computed(() => rental.value ? Math.max(0, rental.value.deposit - wearFeeNow.value) : 0)
 const renting = ref(false)
 async function rent(it) {
@@ -154,6 +157,7 @@ const lineupNext = computed(() => {
               <div class="rent-row"><span>剩余场次</span><b class="mono">{{ rental.max_races - rental.races_used }} / {{ rental.max_races }}</b></div>
               <div class="rent-row"><span>部件健康</span><b class="mono" :class="{ low: rental.parts_dur < 40 }">{{ rental.parts_dur }}%</b></div>
               <div class="rent-row"><span>累计磨损</span><b class="mono" style="color:var(--rose)">{{ rental.wear_total }} 点</b></div>
+              <div v-if="rental.insured_wear" class="rent-row"><span>保险覆盖损伤（免押金）</span><b class="mono" style="color:var(--mint)">−{{ rental.insured_wear }} 点</b></div>
               <div class="rent-row"><span>磨损费预估</span><b class="mono">¥{{ wearFeeNow.toLocaleString() }}</b></div>
               <div class="rent-row"><span>预计退还押金</span><b class="mono" style="color:var(--mint)">¥{{ refundNow.toLocaleString() }}</b></div>
             </div>

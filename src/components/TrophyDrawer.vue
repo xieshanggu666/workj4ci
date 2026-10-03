@@ -24,6 +24,9 @@ const groups = computed(() => {
 function stationName(seq) { return seq < 0 || seq >= store.circuits.length ? '' : `第 ${seq + 1} 站` }
 const curSeason = computed(() => store.team.season || 1)
 const rankTxt = r => (r == null ? '—' : '第 ' + r + ' 名')
+// 某场比赛的事故/理赔状态（用于历史战绩上的事故与保险角标）
+const claimOf = raceId => (store.insurance?.claims || []).find(c => c.raceId === raceId) || null
+const CLAIM_TAG = { reported: '已报案', assessed: '待领取', paid: '已赔付', rejected: '免赔拒赔', reversed: '已冲回' }
 </script>
 
 <template>
@@ -94,6 +97,10 @@ const rankTxt = r => (r == null ? '—' : '第 ' + r + ' 名')
                   <span class="rname">
                     <em class="rseq">{{ stationName(l.seq) }}</em>{{ l.record.circuit.name }}
                     <em class="rweather">{{ wIco[l.record.circuit.weather] }} {{ l.record.circuit.weather }}</em>
+                    <em v-if="l.record.accident" class="racc" :title="l.record.accident.text">
+                      💥 {{ l.record.accident.severityLabel }}
+                      <template v-if="claimOf(l.id)"> · {{ CLAIM_TAG[claimOf(l.id).status] || claimOf(l.id).status }}</template>
+                    </em>
                   </span>
                   <span class="rmedal" :class="'m' + l.rank">{{ l.rank <= 3 ? ['🥇','🥈','🥉'][l.rank-1] : '🌊' }}</span>
                   <span class="rpts mono">+{{ l.pts }} 分</span>

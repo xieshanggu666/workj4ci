@@ -215,6 +215,18 @@ input:focus { border-color: var(--gold); }
 }
 .race-event.overtake { color: var(--gold); border-color: rgba(255,215,106,.6); }
 .race-event.flavor { color: var(--sky); border-color: rgba(126,203,255,.5); }
+.race-event.crash {
+  color: #ffb3c0; border-color: rgba(255,95,110,.75);
+  background: rgba(255,80,102,.16); box-shadow: 0 0 26px rgba(255,80,102,.35);
+  animation: crashShake .5s ease-in-out;
+}
+@keyframes crashShake {
+  0%,100% { transform: translateX(0); }
+  20% { transform: translateX(-7px); }
+  40% { transform: translateX(6px); }
+  60% { transform: translateX(-4px); }
+  80% { transform: translateX(3px); }
+}
 
 /* 操作条 */
 .race-actions { display: flex; justify-content: center; margin-top: 16px; }
@@ -249,6 +261,27 @@ input:focus { border-color: var(--gold); }
 .ct-pay b { color: var(--mint); }
 .ct-pay.revoke { color: var(--pink, #ff9fb0); }
 .ct-pay.revoke b { color: var(--pink, #ff9fb0); }
+
+/* 赛事事故（结算卡） */
+.s-row.accident-row { color: #ffb3c0; }
+.s-row.accident-row b { color: #ff9fb0; font-size: 12px; }
+.s-acc-text { width: 80%; font-size: 11px; color: var(--muted); line-height: 1.5; text-align: center; }
+.s-row.accident-action { color: var(--sky); font-size: 12px; }
+.s-undone { color: var(--muted); font-size: 11px; font-weight: 600; }
+
+/* 赛事保险抽屉 */
+.ins-card { padding: 14px; border-radius: 15px; background: var(--glass); border: 1px solid var(--line); display: flex; flex-direction: column; gap: 10px; }
+.ins-card.active { border-color: rgba(111,231,208,.55); background: rgba(111,231,208,.07); }
+.empty-ins { flex-direction: row; align-items: center; gap: 12px; color: var(--muted); font-size: 12.5px; line-height: 1.6; }
+.ei-ico { font-size: 26px; flex-shrink: 0; }
+.claim-list { display: flex; flex-direction: column; gap: 11px; }
+.claim-card { gap: 9px; }
+.claim-card .tag.gold { background: rgba(255,215,106,.2); color: var(--gold); }
+.claim-meta { display: flex; flex-wrap: wrap; gap: 6px; }
+.claim-text { font-size: 11.5px; color: var(--muted); line-height: 1.55; }
+.claim-note { font-size: 11px; color: var(--sky); background: rgba(126,203,255,.08); border: 1px solid rgba(126,203,255,.25); border-radius: 10px; padding: 7px 10px; line-height: 1.5; }
+.claim-pending { border-color: rgba(255,159,176,.5); background: rgba(255,159,176,.06); }
+.claim-paid-row b { font-size: 12.5px; }
 .settle-mask { position: absolute; inset: 0; z-index: 8; background: rgba(10,12,34,.6); display: grid; place-items: center; }
 .settle-spin { padding: 16px 26px; border-radius: 16px; background: rgba(20,22,58,.95); border: 1px solid rgba(255,215,106,.5); font-weight: 800; font-size: 14px; color: var(--gold); }
 
@@ -412,6 +445,7 @@ input:focus { border-color: var(--gold); }
 .rname .rseq { font-style: normal; color: var(--mint); font-size: 11px; font-weight: 700; margin-right: 8px; }
 .rmedal { font-size: 20px; }
 .rpts { color: var(--gold); font-size: 12px; }
+.racc { font-style: normal; color: #ff9fb0; font-size: 10.5px; font-weight: 700; margin-left: 8px; }
 
 /* 卡片 - 磨砂玻璃 */
 .card {

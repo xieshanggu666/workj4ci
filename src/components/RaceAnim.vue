@@ -60,6 +60,15 @@ const activeEvent = computed(() => {
   return ev && now.value - ev.t < 2.4 ? ev : null
 })
 const result = computed(() => rec.value.result)
+// 赛事事故（开赛记录快照）：损伤/责任/声望损失与保险理赔只认这份数据
+const accident = computed(() => rec.value.accident || null)
+// 结算后本场事故的报案/理赔状态（settle 响应带 claimId；刷新后由保险列表兜底）
+const accidentClaim = computed(() => {
+  const fromResp = respAccident.value?.claimId
+  const list = store.state?.insurance?.claims || []
+  return list.find(c => c.raceId === props.race.id) || (fromResp ? { id: fromResp, status: 'reported' } : null)
+})
+const respAccident = ref(null)
 // 当前赛季滚动战绩（结算后由 /api/state 刷新；结算瞬间用 store 里的归档榜兜底）
 const seasonStats = computed(() =>
   store.seasons.find(x => x.current && x.season === rec.value.season) ||
@@ -99,6 +108,7 @@ async function finish() {
     contractsPaid.value = r.contractsPaid || []
     contractsRevoked.value = r.contractsRevoked || []
     seasonComplete.value = !!r.seasonComplete
+    respAccident.value = r.accident || null
     await store.refresh() // 拉齐积分/赛季榜，结算卡的赛季总结按最新滚动战绩渲染
     showSettle.value = true
   } else {
@@ -125,6 +135,18 @@ async function goBack() {
   emit('back')
 }
 // 6 站完赛 → 衔接新赛季：服务端归档排行榜、分层重置；成功后返回航线（App 会再次刷新状态）
+const claiming = ref(false)
+// 结算卡上的事故快捷报案：报案后提示去「赛事保险」抽屉定损与领取赔付
+async function reportClaim() {
+  if (claiming.value || !accident.value) return
+  claiming.value = true
+  const r = await store.reportClaim(props.race.id)
+  claiming.value = false
+  if (r?.ok) {
+    respAccident.value = { ...(respAccident.value || accident.value), claimId: r.claim?.id ?? null }
+    store.tip(r.msg || '已受理报案，请到「赛事保险」完成定损与领取赔付')
+  }
+}
 async function startNewSeason() {
   if (advancing.value) return
   advancing.value = true
@@ -222,10 +244,10 @@ onUnmounted(() => { if (raf) cancelAnimationFrame(raf) })
           <div class="pos" :class="{ 'pos-p': r.isPlayer }">{{ r.done ? '🏁' : rankLive.indexOf(r) + 1 }}</div>
         </div>
 
-        <!-- 分段事件横幅：超车 / 天气 -->
+        <!-- 分段事件横幅：超车 / 天气 / 事故 -->
         <transition name="pop">
           <div v-if="activeEvent" class="race-event" :class="activeEvent.type">
-            {{ activeEvent.type === 'overtake' ? '🔥 ' : '🌦️ ' }}{{ activeEvent.text }}
+            {{ activeEvent.type === 'overtake' ? '🔥 ' : activeEvent.type === 'crash' ? '💥 ' : '🌦️ ' }}{{ activeEvent.text }}
           </div>
         </transition>
       </div>
@@ -259,6 +281,33 @@ onUnmounted(() => { if (raf) cancelAnimationFrame(raf) })
             <span>租艇磨损（{{ rec.factors.rental.name }}）</span><b style="color:#ff9fb0">-{{ result.wear }} · 记入租约</b>
           </div>
           <div class="s-row" v-else><span>部件磨损</span><b style="color:#ff9fb0">-{{ result.wear }}</b></div>
+          <!-- 赛事事故：常规磨损之外的事故损伤与声望损失（开赛快照，理赔的唯一依据） -->
+          <template v-if="accident">
+            <div class="s-row accident-row">
+              <span>💥 {{ accident.severityLabel }}（{{ accident.faultLabel }}）· {{ accident.part }}</span>
+              <b style="color:#ff9fb0">事故损伤 -{{ accident.damage }} · 声望 -{{ accident.repLoss }}</b>
+            </div>
+            <div class="s-acc-text">{{ accident.text }}</div>
+            <!-- live：本场保单快照决定能否报案；replay：按当前理赔单状态展示结果 -->
+            <div v-if="rec.factors.policy && !accidentClaim" class="s-row accident-action">
+              <span>🛡️ {{ rec.factors.policy.name }} 承保中</span>
+              <b>
+                <button v-if="isLive" class="btn sm primary" :disabled="claiming" @click="reportClaim">
+                  {{ claiming ? '报案中…' : '📮 立即报案理赔' }}
+                </button>
+                <span v-else class="s-undone">未报案</span>
+              </b>
+            </div>
+            <div v-else-if="rec.factors.policy && accidentClaim" class="s-row accident-action">
+              <span>🛡️ 保险理赔</span>
+              <b style="color:var(--mint)">
+                {{ { reported: '已报案 · 待定损', assessed: '已定损 · 待领取赔付', paid: '已赔付到账', rejected: '免赔拒赔', reversed: '比赛作废 · 已冲回' }[accidentClaim.status] || accidentClaim.status }}
+              </b>
+            </div>
+            <div v-else-if="!rec.factors.policy" class="s-row accident-action">
+              <span>🛡️ 未投保赛事险</span><b style="color:var(--muted)">事故损失自担</b>
+            </div>
+          </template>
           <div class="s-row"><span>声望</span><b>+{{ result.repGain }}</b></div>
           <!-- 赛季合约在结算事务内一次性兑现（幂等，重放不重复发奖） -->
           <div v-for="c in contractsPaid" :key="'p' + c.id" class="s-row ct-pay">

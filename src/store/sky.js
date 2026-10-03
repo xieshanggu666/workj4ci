@@ -28,6 +28,8 @@ export const useSkyStore = defineStore('sky', {
     lineup: s => s.state?.lineup || null,
     // 历届赛季榜（归档赛季 + 当前赛季滚动行，新季在前）
     seasons: s => s.state?.seasons || [],
+    // 赛事保险：方案目录 / 当前赛季保单 / 理赔单 / 待报案事故
+    insurance: s => s.state?.insurance || { plans: [], current: null, claims: [], pendingAccidents: [] },
     // 当前赛季 6 站是否已全部完赛（尚未衔接新赛季）
     seasonComplete: s => !!s.state?.seasonComplete
   },
@@ -59,6 +61,14 @@ export const useSkyStore = defineStore('sky', {
     async settleRace(raceId) { return await post(`/api/races/${raceId}/settle`) },
     // 进入新赛季：归档老赛季排行榜，重置积分/赛站/合约；老赛季战绩与回放保留
     async advanceSeason() { return await post('/api/seasons/advance') },
+    // 赛事保险：投保只提交方案 id（保费/赔付口径服务端核定）
+    async buyInsurance(id) { const r = await post('/api/insurance/buy', { id }); await this.refresh(); if (!r.ok) this.tip(r.msg); return r },
+    // 事故报案：只提交比赛 id；损伤/责任/损失一律以开赛记录快照为准
+    async reportClaim(raceId) { const r = await post(`/api/insurance/claims/report/${raceId}`); await this.refresh(); if (!r.ok) this.tip(r.msg); return r },
+    // 保险方定损：核定损失 / 免赔额 / 应赔金额（幂等）
+    async assessClaim(id) { const r = await post(`/api/insurance/claims/${id}/assess`); await this.refresh(); if (!r.ok) this.tip(r.msg); return r },
+    // 领取赔付：资金到账 + 声望救济；租约艇事故同步联动押金（幂等）
+    async payClaim(id) { const r = await post(`/api/insurance/claims/${id}/pay`); await this.refresh(); if (!r.ok) this.tip(r.msg); return r },
     async reset() { await post('/api/reset'); await this.init() }
   }
 })

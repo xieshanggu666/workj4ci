@@ -136,6 +136,50 @@ CREATE TABLE IF NOT EXISTS lineup (
   ship_mode TEXT NOT NULL DEFAULT 'auto',
   updated_at TEXT
 );
+-- 赛事保险保单：按赛季投保（一季最多一份），保费投保即扣不退；赔付比例 / 免赔额 /
+-- 声望救济比例在投保时快照。赛季衔接后老保单置 expired，但开赛快照（races.record.factors.policy）
+-- 已承保的老赛季比赛仍可凭快照报案理赔；新赛季需重新投保。
+CREATE TABLE IF NOT EXISTS insurance_policies (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  plan_id INTEGER NOT NULL,            -- 保险方案目录 id（服务端配置）
+  name TEXT NOT NULL,
+  season INTEGER NOT NULL,
+  premium INTEGER NOT NULL,            -- 保费（投保一次性扣除，不退）
+  cover INTEGER NOT NULL,              -- 定损金额赔付比例 %
+  deductible INTEGER NOT NULL,         -- 免赔额（仅己方责任事故扣除）
+  rep_relief INTEGER NOT NULL,         -- 赔付时恢复的事故声望损失比例 %
+  status TEXT NOT NULL DEFAULT 'active',  -- active | expired
+  created_at TEXT,
+  expired_at TEXT
+);
+-- 保险理赔单：一场比赛最多一单（race_id 唯一）。状态机：
+-- reported（已报案）→ assessed（已定损，待领取）→ paid（已赔付，终态）；
+-- 定损金额不足免赔 → rejected（终态）；比赛被历史修复作废 → reversed（赔付对称冲回）。
+-- 损伤 / 责任一律取自比赛记录（races.record.accident），客户端不可改写。
+CREATE TABLE IF NOT EXISTS insurance_claims (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  race_id INTEGER NOT NULL UNIQUE,
+  season INTEGER NOT NULL,
+  policy_id INTEGER NOT NULL,
+  rental_id INTEGER,                   -- 租约艇事故关联租约；赔付后该部分损伤免计押金（rentals.insured_wear）
+  severity TEXT NOT NULL,              -- light | medium | heavy
+  fault TEXT NOT NULL,                 -- rival | weather | pilot
+  damage INTEGER NOT NULL,             -- 事故损伤点数（比赛记录快照）
+  rep_loss INTEGER NOT NULL DEFAULT 0, -- 事故声望损失（比赛记录快照）
+  loss INTEGER,                        -- 报案登记损失预估（损伤 × 维修/租约磨损费率）
+  assessed_loss INTEGER,               -- 保险方核定损失
+  deductible INTEGER NOT NULL DEFAULT 0,
+  payable INTEGER,                     -- 核定赔付金额
+  payout INTEGER,                      -- 实际到账赔付（领取时写入）
+  rep_relief INTEGER NOT NULL DEFAULT 0,  -- 赔付时恢复的声望
+  status TEXT NOT NULL,
+  report_note TEXT,
+  assess_note TEXT,
+  created_at TEXT,
+  assessed_at TEXT,
+  paid_at TEXT,
+  reversed_at TEXT
+);
 -- 比赛记录：动画 / 实时排名 / 最终奖励共用的唯一事实来源
 -- status=running 未完赛（可中断续看）；settled=1 已结算（奖励只发一次，可历史回放）
 CREATE TABLE IF NOT EXISTS races (
@@ -161,6 +205,9 @@ CREATE TABLE IF NOT EXISTS races (
 try { db.exec('ALTER TABLE race_log ADD COLUMN race_id INTEGER') } catch (e) {}
 // 老库兼容：races 增加 voided_at 列（越站历史修复作废记录用）
 try { db.exec('ALTER TABLE races ADD COLUMN voided_at TEXT') } catch (e) {}
+// 老库兼容：rentals 增加 insured_wear 列——已由保险赔付覆盖的事故损伤点数，
+// 归还结算时从计费基数（wear_total）中剔除，与保险赔付不重复扣押金
+try { db.exec('ALTER TABLE rentals ADD COLUMN insured_wear INTEGER NOT NULL DEFAULT 0') } catch (e) {}
 
 export function run(sql, ...p) { return db.prepare(sql).run(...p) }
 export function all(sql, ...p) { return db.prepare(sql).all(...p) }
